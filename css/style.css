@@ -1,0 +1,33 @@
+*{
+    margin: 0;
+    padding: 0;
+    font-size: 14px;
+}
+
+body{
+    margin: 0;
+    padding: 0;
+    font-size: 14px;
+    line-height: 1.5;
+    font-weight: 300;
+    color: #000000;
+    background-color: #ffffff;
+}
+
+section{
+    height: 100vh;
+    padding: 49vh 0;
+    background-color: #dddddd;
+}
+
+.mb-2{
+    margin-bottom: 10px;
+}
+
+@media (max-width: 750px) {
+    section{
+        height: audio;
+        padding: 40px 0;
+        background-color: #dddddd;
+    }
+}
