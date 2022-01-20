@@ -1,41 +1,58 @@
 <?php
+use Facebook\Facebook;
+use Facebook\Exceptions\FacebookResponseException;
+use Facebook\Exceptions\FacebookSDKException;
 
 class Functions{
 
     public function fblogin(string ...$path){
-        session_start();
-        $facebook = new \Facebook\Facebook([
+        $facebook = new Facebook([
             'app_id'      => FACEBOOK_APP_ID,
             'app_secret'     => FACEBOOK_APP_SECRET,
             'default_graph_version'  => 'v2.10'
         ]);
+
         $facebook_helper = $facebook->getRedirectLoginHelper();
-        if (!empty($_GET['code'])) {
-            $access_token = $facebook_helper->getAccessToken();
-            $graph_response = $facebook->get("/me?fields=email,name,picture", $access_token);
-            $facebook_user_info = $graph_response->getGraphUser();
-            //id field
-            $userDetails = [];
-            $userDetails['email'] = $facebook_user_info['email'];
-            $userDetails['first_name'] = $facebook_user_info['name'];
-            $userDetails['auth_id'] = $facebook_user_info['id'];
-            $userDetails['auth_medium'] = "facebook";
-            if (isset($facebook_user_info['picture']))
-                $userDetails['picture'] = $facebook_user_info['picture']->getUrl();
-            if (empty($facebook_user_info['email']) or empty($facebook_user_info['id'])) {
-                $session = $this->request->getSession();
-                $session->destroy();
-                $session->write('authEmailError', 1);
-                header('Location: ' . BASE_URL);
-                exit();
+
+        try {
+            if(isset($_SESSION['facebook_access_token'])){
+                $access_token = $_SESSION['facebook_access_token'];
+            }else{
+                $access_token = $facebook_helper->getAccessToken();
             }
-            
-            $this->loginuserinportal($userDetails);
-        } else if (empty($_GET)) {
-            $facebook_permissions = ['email'];
-            $facebook_login_url = $facebook_helper->getLoginUrl(BASE_URL . '/fblogin', $facebook_permissions);
-            header("Location: " . $facebook_login_url);
+
+            if(isset($accessToken)){
+                $graph_response = $facebook->get("/me?fields=email,name,picture", $access_token);
+                $facebook_user_info = $graph_response->getGraphUser();
+                //id field
+                $userDetails = [];
+                $userDetails['email'] = $facebook_user_info['email'];
+                $userDetails['first_name'] = $facebook_user_info['name'];
+                $userDetails['auth_id'] = $facebook_user_info['id'];
+                $userDetails['auth_medium'] = "facebook";
+                if (isset($facebook_user_info['picture']))
+                    $userDetails['picture'] = $facebook_user_info['picture']->getUrl();
+                if (empty($facebook_user_info['email']) or empty($facebook_user_info['id'])) {
+                    session_destroy();
+                    $_SESSION['authEmailError'] = 1;
+                    header('Location: ' . BASE_URL);
+                    exit();
+                }
+                
+                $this->loginuserinportal($userDetails);
+            } else{
+                $facebook_permissions = ['email'];
+                $facebook_login_url = $facebook_helper->getLoginUrl(FACEBOOK_REDIRECT_URL, $facebook_permissions);
+                return $facebook_login_url;
+            }
+        }catch(FacebookResponseException $e) {
+            session_destroy();
+            $_SESSION['authEmailError'] = 1;
+            header('Location: ' . BASE_URL);
             exit();
+        } catch(FacebookSDKException $e) {
+            echo 'Facebook SDK returned an error: ' . $e->getMessage();
+            exit;
         }
     }
 
@@ -74,9 +91,8 @@ class Functions{
 
             //if user email not available rediect user to homepage with error toast
             if (!isset($profile['email']) or !isset($profile['sub'])) {
-                $session = $this->request->getSession();
-                $session->destroy();
-                $session->write('authEmailError', 1);
+                session_destroy();
+                $_SESSION['authEmailError'] = 1;
                 header('Location: ' . BASE_URL);
                 exit();
             }
@@ -136,9 +152,8 @@ class Functions{
 
             //if user email not available rediect user to homepage with error toast
             if (empty($gpUserProfile['email']) or empty($gpUserProfile['id'])) {
-                $session = $this->request->getSession();
-                $session->destroy();
-                $session->write('authEmailError', 1);
+                session_destroy();
+                $_SESSION['authEmailError'] = 1;
                 header('Location: ' . BASE_URL);
                 exit();
             }
@@ -186,9 +201,8 @@ class Functions{
                     $userDetails['auth_medium'] = "twitter";
                     //if user email not available rediect user to homepage with error toast
                     if (empty($userDetails['email']) or empty($userDetails['auth_id'])) {
-                        $session = $this->request->getSession();
-                        $session->destroy();
-                        $session->write('authEmailError', 1);
+                        session_destroy();
+                        $_SESSION['authEmailError'] = 1;
                         header('Location: ' . BASE_URL);
                         exit();
                     }
@@ -199,6 +213,71 @@ class Functions{
         } catch (ForbiddenException $exception) {
             echo 'Fordbidden request' . $exception;
         }
+    }
+
+    public function loginuserinportal($userDetails)
+    {
+        $email = $userDetails['email'];
+        $auth_id = $userDetails['auth_id'];
+        $auth_medium = $userDetails['auth_medium'];
+        $results = $conn->query("SELECT * FROM user where (email = '$email' or auth_id='$auth_id')")->fetch_assoc();
+
+        if (!empty($results)) {
+            $results = current($results);
+            
+
+            if($results['auth_medium'] !== $auth_medium){
+                $this->Flash->error(__('Unable to login. As your account linked using '.$results['auth_medium'].' SNS service'));
+                unset($_SESSION['loginRedirect']);
+                header('Location:' . BASE_URL);
+                exit();
+            }
+
+            //check for active user
+            if ($results['status'] === 'inactive') {
+                $this->Flash->error(__('Unable to login. As your account has been suspended'));
+                unset($_SESSION['loginRedirect']);
+                header('Location:' . BASE_URL);
+                exit();
+            }
+
+            $_SESSION['user_id'] = $results['id'];
+            $_SESSION['username'] = $results['name'];
+            $_SESSION['email_id'] = $results['email'];
+            if (isset($results['profile']) and !empty($results['profile']))
+                $_SESSION['profile'] = $results['profile'];
+           
+            $redirectUrl = $_SESSION['loginRedirect'];
+            if (isset($redirectUrl)) {
+                unset($_SESSION['loginRedirect']);
+                header('Location:' . $redirectUrl);
+                exit();
+            } else {
+                header('Location:' . BASE_URL.'fblogin.php');
+                exit();
+            }
+        } else {
+            $this->registeruserindB($userDetails);
+        }
+    }
+
+    public function registeruserindB($userDetails){
+        $registerData = [
+            'auth_medium'=> !empty($userDetails['auth_medium']) ? $userDetails['auth_medium'] : "",
+            'auth_id'=> !empty($userDetails['auth_id']) ? $userDetails['auth_id'] : "",
+            'email ' => $userDetails['email'],
+            'password' => md5($userDetails['email']),
+            'name' => !empty($userDetails['first_name']) ? $userDetails['first_name'] : "",
+            'last_name' => !empty($userDetails['last_name']) ? $userDetails['last_name'] : "",
+            'phone' => '',
+            'status' => 'active',
+            'profile' => !empty($userDetails['picture']) ? $userDetails['picture'] : NULL
+        ];
+        $columns = implode(", ",array_keys($registerData));
+        $escaped_values = array_map('mysql_real_escape_string', array_values($registerData));
+        $values  = implode(", ", $escaped_values);
+        $conn->query("INSERT INTO user (".$columns.") VALUES (".$values.") ");
+        $this->loginuserinportal(['email' => $userDetails['email'],'auth_id'=>$userDetails['auth_id'],'auth_medium'=>$userDetails['auth_medium']]);
     }
 
 }
